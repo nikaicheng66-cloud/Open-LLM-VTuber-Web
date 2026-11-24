@@ -2,9 +2,18 @@
  * Global audio manager for handling audio playback and interruption
  * This ensures all components share the same audio reference
  */
+// [deskpet] while the mic hears something during her reply, she is turned down instead of cut off:
+// the server first checks whether the sound is the PC's own speakers ("echo-ignored") or the
+// user ("barge-in"); only the latter interrupts her
+const DUCKED_VOLUME = 0.6;
+const DUCK_MAX_MS = 10000; // longest she stays turned down waiting for a verdict
+
 class AudioManager {
   private currentAudio: HTMLAudioElement | null = null;
   private currentModel: any | null = null;
+  private ducked = false;
+  /** [deskpet] heard sound during her reply, waiting for the server's verdict */
+  bargeInPending = false;
 
   /**
    * Set the current playing audio
@@ -12,6 +21,31 @@ class AudioManager {
   setCurrentAudio(audio: HTMLAudioElement, model: any) {
     this.currentAudio = audio;
     this.currentModel = model;
+    audio.volume = this.ducked ? DUCKED_VOLUME : 1; // [deskpet] a sentence that starts while ducked
+  }
+
+  private duckTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** [deskpet] turn her down (true) or back up (false).
+   * Never stays down on its own: if no verdict comes (the mic was stopped mid-sentence, a
+   * message got lost), she is turned back up after DUCK_MAX_MS. */
+  duck(on: boolean) {
+    this.ducked = on;
+    clearTimeout(this.duckTimer);
+    if (on) {
+      this.duckTimer = setTimeout(() => {
+        console.warn('[deskpet] no verdict on the sound heard during her reply - volume back up');
+        this.bargeInPending = false;
+        this.duck(false);
+      }, DUCK_MAX_MS);
+    }
+    if (this.currentAudio) this.currentAudio.volume = on ? DUCKED_VOLUME : 1;
+  }
+
+  /** [deskpet] a turn started or ended: whatever was pending is over, full volume */
+  resetDuck() {
+    this.bargeInPending = false;
+    if (this.ducked) this.duck(false);
   }
 
   /**

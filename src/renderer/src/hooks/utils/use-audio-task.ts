@@ -13,6 +13,7 @@ import { useWebSocket } from '@/context/websocket-context';
 import { DisplayText } from '@/services/websocket-service';
 import { useLive2DExpression } from '@/hooks/canvas/use-live2d-expression';
 import * as LAppDefine from '../../../WebSDK/src/lappdefine';
+import { petActions } from '@/utils/pet-actions'; // [deskpet]
 
 // Simple type alias for Live2D model
 type Live2DModel = any;
@@ -23,6 +24,7 @@ interface AudioTaskOptions {
   sliceLength: number
   displayText?: DisplayText | null
   expressions?: string[] | number[] | null
+  motions?: string[] | null // [deskpet]
   speaker_uid?: string
   forwarded?: boolean
 }
@@ -80,7 +82,10 @@ export const useAudioTask = () => {
       return;
     }
 
-    const { audioBase64, displayText, expressions, forwarded } = options;
+    const { audioBase64, displayText, expressions, forwarded, motions } = options;
+
+    // [deskpet] poses, walking and hiding requested by the reply
+    petActions.run(motions);
 
     // Update display text
     if (displayText) {

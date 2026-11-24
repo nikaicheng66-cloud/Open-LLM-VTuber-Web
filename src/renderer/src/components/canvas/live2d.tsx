@@ -77,10 +77,6 @@ export const Live2D = memo(
     //   };
     // }, [setExpression]);
 
-    const handlePointerDown = (e: React.PointerEvent) => {
-      handlers.onMouseDown(e);
-    };
-
     const handleContextMenu = (e: React.MouseEvent) => {
       if (!isPet) {
         return;
@@ -105,7 +101,6 @@ export const Live2D = memo(
           position: "relative",
           cursor: isDragging ? "grabbing" : "default",
         }}
-        onPointerDown={handlePointerDown}
         onContextMenu={handleContextMenu}
         {...handlers}
       >

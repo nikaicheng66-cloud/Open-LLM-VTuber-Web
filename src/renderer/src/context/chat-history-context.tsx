@@ -13,7 +13,7 @@ interface ChatHistoryState {
   messages: Message[]; // Use the unified Message type
   historyList: HistoryInfo[];
   currentHistoryUid: string | null;
-  appendHumanMessage: (content: string) => void;
+  appendHumanMessage: (content: string, images?: string[]) => void;
   appendAIMessage: (content: string, name?: string, avatar?: string) => void;
   appendOrUpdateToolCallMessage: (toolMessageData: Partial<Message>) => void; // Accept partial data
   setMessages: (messages: Message[]) => void; // Use the unified Message type
@@ -65,13 +65,14 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
    * Append a human message to the chat history
    * @param content - Message content
    */
-  const appendHumanMessage = useCallback((content: string) => {
+  const appendHumanMessage = useCallback((content: string, images?: string[]) => {
     const newMessage: Message = {
       id: Date.now().toString(),
       content,
       role: 'human',
       type: 'text', // Explicitly set type for human messages
       timestamp: new Date().toISOString(),
+      ...(images?.length ? { images } : {}), // [deskpet] pictures given with these words
     };
     setMessages((prevMessages) => [...prevMessages, newMessage]);
   }, []);

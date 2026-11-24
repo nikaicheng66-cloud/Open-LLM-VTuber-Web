@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 import electron from 'electron';
-const { contextBridge, ipcRenderer, desktopCapturer } = electron;
+const { contextBridge, ipcRenderer, desktopCapturer, webUtils } = electron;
 import { electronAPI } from '@electron-toolkit/preload';
 import { ConfigFile } from '../main/menu-manager';
 
@@ -62,6 +62,11 @@ const api = {
   setMode: (mode: 'window' | 'pet') => {
     ipcRenderer.send('pre-mode-changed', mode);
   },
+  // [deskpet] only real dropped File objects have a path, so the page can't name one itself
+  dropAudio: (files: File[]) => ipcRenderer.invoke(
+    'deskpet-drop-audio',
+    files.map((file) => webUtils.getPathForFile(file)),
+  ),
   getConfigFiles: () => ipcRenderer.invoke('get-config-files'),
   updateConfigFiles: (files: ConfigFile[]) => {
     ipcRenderer.send('update-config-files', files);

@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { MicVAD } from '@ricky0123/vad-web';
 import { useInterrupt } from '@/components/canvas/live2d';
 import { audioTaskQueue } from '@/utils/task-queue';
+import { audioManager } from '@/utils/audio-manager'; // [deskpet]
 import { useSendAudio } from '@/hooks/utils/use-send-audio';
 import { SubtitleContext } from './subtitle-context';
 import { AiStateContext, AiState } from './ai-state-context';
@@ -209,8 +210,14 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     console.log('Real speech confirmed - checking if need to interrupt');
     // Check if we need to interrupt based on the PREVIOUS state (before speech started)
     if (previousAiStateRef.current === 'thinking-speaking') {
-      console.log('Interrupting AI speech due to user speaking');
-      interruptRef.current();
+      // [deskpet] don't cut her off yet: the "speech" may be the PC's own speakers (music, a
+      // video, her own voice). Turn her down and let the server decide - it answers with
+      // "barge-in" (it was the user: interrupt) or "echo-ignored" (carry on). The state stays
+      // 'thinking-speaking' so the rest of her reply keeps arriving and playing.
+      console.log('[deskpet] sound during her reply - ducking, waiting for the server');
+      audioManager.bargeInPending = true;
+      audioManager.duck(true);
+      return;
     }
     // Now change to listening state
     setAiStateRef.current('listening');
@@ -231,7 +238,11 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
   const handleSpeechEnd = useCallback((audio: Float32Array) => {
     if (!isProcessingRef.current) return;
     console.log('Speech ended');
-    audioTaskQueue.clearQueue();
+    // [deskpet] heard during her reply: keep her reply queued until the server says it was the user
+    const duringReply = audioManager.bargeInPending;
+    if (!duringReply) audioTaskQueue.clearQueue();
+    // the sound is complete and goes to the server: stopping the mic below is not "cut off midway"
+    isProcessingRef.current = false;
 
     if (autoStopMicRef.current) {
       stopMic();
@@ -242,7 +253,7 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     setPreviousTriggeredProbability(0);
     sendAudioPartitionRef.current(audio);
     isProcessingRef.current = false;
-    setAiStateRef.current("thinking-speaking");
+    if (!duringReply) setAiStateRef.current("thinking-speaking");
   }, []);
 
   /**
@@ -253,6 +264,12 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     console.log('VAD misfire detected');
     setPreviousTriggeredProbability(0);
     isProcessingRef.current = false;
+    if (audioManager.bargeInPending) {
+      // [deskpet] too short to be speech: nothing goes to the server, just turn her back up
+      audioManager.bargeInPending = false;
+      audioManager.duck(false);
+      return;
+    }
 
     // Restore previous AI state and show helpful misfire message
     setAiStateRef.current(previousAiStateRef.current);
@@ -333,6 +350,9 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       console.log('VAD instance not found');
     }
     setMicOn(false);
+    // [deskpet] stopped in the middle of hearing something during her reply: that sound will
+    // never reach the server, so no verdict will come - turn her back up now
+    if (isProcessingRef.current && audioManager.bargeInPending) audioManager.resetDuck();
     isProcessingRef.current = false;
   }, []);
 

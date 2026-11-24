@@ -73,6 +73,15 @@ export class MenuManager {
               });
             },
           },
+          {
+            // [deskpet] show/hide the typing box and subtitle from the tray
+            label: '显示/隐藏输入框',
+            click: () => {
+              BrowserWindow.getAllWindows().forEach((window) => {
+                window.webContents.send('toggle-input-subtitle');
+              });
+            },
+          },
           { type: 'separator' as const },
         ]
         : []),

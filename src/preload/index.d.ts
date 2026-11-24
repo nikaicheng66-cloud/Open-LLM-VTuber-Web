@@ -16,6 +16,7 @@ declare global {
       onToggleScrollToResize: (callback: () => void) => void
       onSwitchCharacter: (callback: (filename: string) => void) => void
       setMode: (mode: 'window' | 'pet') => void
+      dropAudio: (files: File[]) => Promise<{ ok: boolean; message: string }>
       getConfigFiles: () => Promise<any>
       updateConfigFiles: (files: any[]) => void
     }

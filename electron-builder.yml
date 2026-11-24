@@ -18,6 +18,9 @@ asarUnpack:
 win:
   executableName: open-llm-vtuber-electron
   icon: resources/icon.ico
+  # [deskpet] skip code signing / exe resource editing: needs a tool archive
+  # whose symlinks can't be unpacked without admin or Developer Mode
+  signAndEditExecutable: false
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

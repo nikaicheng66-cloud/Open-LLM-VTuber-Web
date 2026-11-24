@@ -571,7 +571,8 @@ export class LAppModel extends CubismUserModel {
     //--------------------------------------------------------------------------
 
     // まばたき
-    if (!motionUpdated) {
+    // [deskpet] always blink: our idle motion never touches the eyes
+    if (true || !motionUpdated) {
       if (this._eyeBlink != null) {
         // メインモーションの更新がないとき
         this._eyeBlink.updateParameters(this._model, deltaTimeSeconds); // 目パチ

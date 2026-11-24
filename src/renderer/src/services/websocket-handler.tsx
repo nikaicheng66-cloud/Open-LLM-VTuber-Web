@@ -1,3 +1,5 @@
+import { petActions } from '@/utils/pet-actions'; // [deskpet]
+import { audioManager } from '@/utils/audio-manager'; // [deskpet]
 /* eslint-disable no-sparse-arrays */
 /* eslint-disable react-hooks/exhaustive-deps */
 // eslint-disable-next-line object-curly-newline
@@ -39,6 +41,9 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { startMic, stopMic, autoStartMicOnConvEnd } = useVAD();
   const autoStartMicOnConvEndRef = useRef(autoStartMicOnConvEnd);
   const { interrupt } = useInterrupt();
+  // [deskpet] the latest interrupt (it reads the current state), for use inside the memoised handler
+  const interruptRef = useRef(interrupt);
+  interruptRef.current = interrupt;
   const { setBrowserViewData } = useBrowser();
 
   useEffect(() => {
@@ -67,12 +72,40 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         stopMic();
         break;
       case 'conversation-chain-start':
+        // [deskpet] she is about to answer someone: typed here, heard through the microphone,
+        // or sent from the phone app. If she was put in the tray, come back out (the main
+        // process ignores this while the window is already visible). Proactive speaking is
+        // off, so a chain only ever starts because the user addressed her.
+        (window as any).electron?.ipcRenderer?.send('window-show');
         setAiState('thinking-speaking');
         audioTaskQueue.clearQueue();
         clearResponse();
+        audioManager.resetDuck(); // [deskpet] a new reply always starts at full volume
+        break;
+      case 'barge-in':
+        // [deskpet] the sound heard during her reply was the user: stop her now. The server has
+        // already cancelled that reply, so no interrupt-signal (it would cancel the new turn).
+        if (audioManager.bargeInPending) {
+          audioManager.bargeInPending = false;
+          audioManager.duck(false);
+          interruptRef.current(false);
+        }
+        break;
+      case 'echo-ignored':
+        // [deskpet] what the mic heard was the PC's own speakers: nothing was said to her
+        if (audioManager.bargeInPending) {
+          audioManager.bargeInPending = false;
+          audioManager.duck(false); // her reply simply carries on
+        } else {
+          // she was idle: the mic stopped and the state went to 'thinking-speaking' for nothing
+          setAiState((cur: AiState) => (cur === 'thinking-speaking' && !audioManager.hasCurrentAudio() ? 'idle' : cur));
+        }
+        if (autoStartMicOnConvEndRef.current) startMic();
         break;
       case 'conversation-chain-end':
         audioTaskQueue.addTask(() => new Promise<void>((resolve) => {
+          // [deskpet] her reply is over: nothing left to turn down
+          if (!audioManager.bargeInPending) audioManager.resetDuck();
           setAiState((currentState: AiState) => {
             if (currentState === 'thinking-speaking') {
               // Auto start mic if enabled
@@ -152,6 +185,11 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           bgUrlContext?.setBackgroundFiles(message.files);
         }
         break;
+      case 'pet-action': // [deskpet] movement recognised from the user's request
+        petActions.run((message as any).motions || null, true);
+        break;
+      case 'audio-note': // [deskpet] shown by components/electron/audio-drop.tsx
+        break;
       case 'audio':
         if (aiState === 'interrupted' || aiState === 'listening') {
           console.log('Audio playback intercepted. Sentence:', message.display_text?.text);
@@ -163,6 +201,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             sliceLength: message.slice_length || 0,
             displayText: message.display_text || null,
             expressions: message.actions?.expressions || null,
+            motions: message.actions?.motions || null, // [deskpet]
             forwarded: message.forwarded || false,
           });
         }

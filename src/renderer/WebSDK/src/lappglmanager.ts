@@ -49,6 +49,11 @@ export class LAppGlManager {
 
      gl = canvas.getContext("webgl2");
 
+     // [deskpet] a game or video can take the GPU away and the drawing context is lost: the character
+     // vanishes. Let the browser restore it, then reload the page so the model is drawn again.
+     canvas.addEventListener("webglcontextlost", (e) => { e.preventDefault(); console.warn("[deskpet] WebGL context lost"); });
+     canvas.addEventListener("webglcontextrestored", () => { window.location.reload(); });
+
      if (!gl) {
        // gl初期化失敗
        alert("Cannot initialize WebGL. This browser does not support.");

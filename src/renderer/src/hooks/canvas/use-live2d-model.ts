@@ -10,6 +10,7 @@ import { updateModelConfig } from '../../../WebSDK/src/lappdefine';
 import { LAppDelegate } from '../../../WebSDK/src/lappdelegate';
 import { initializeLive2D } from '@cubismsdksamples/main';
 import { useMode } from '@/context/mode-context';
+import { petActions } from '@/utils/pet-actions';
 
 interface UseLive2DModelProps {
   modelInfo: ModelInfo | undefined;
@@ -202,7 +203,47 @@ export const useLive2DModel = ({
     return { x, y };
   }, [getCanvasScale]);
 
+  // [deskpet] Dragging used to run off React's `isDragging` state inside the canvas's own mouse
+  // handlers. That broke on a quick pull: the first big move still saw the stale "not dragging",
+  // ran the hover test at a cursor that had already left her, told Electron to make the window
+  // click-through again, and the drag was dead; and when the bubble beside her head slid under
+  // the cursor, the canvas got a mouseleave that ended the drag too. Now a press on her installs
+  // document-level move/up listeners (so nothing in between can swallow them), all decisions use
+  // refs, and the hover test is skipped for the whole drag.
+  const isDraggingRef = useRef(false);
+  const latestRef = useRef({ modelInfo, isPet });
+  latestRef.current = { modelInfo, isPet };
+
+  const applyDrag = useCallback((clientX: number, clientY: number) => {
+    const adapter = (window as any).getLAppAdapter?.();
+    const view = LAppDelegate.getInstance().getView();
+    const model = adapter?.getModel();
+    const canvas = canvasRef.current;
+    if (!adapter || !view || !model || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / canvas.clientWidth;
+    const startModelX = view._deviceToScreen.transformX(dragStartPos.current.x * scale);
+    const startModelY = view._deviceToScreen.transformY(dragStartPos.current.y * scale);
+    const currentModelX = view._deviceToScreen.transformX((clientX - rect.left) * scale);
+    const currentModelY = view._deviceToScreen.transformY((clientY - rect.top) * scale);
+
+    const newX = modelStartPos.current.x + (currentModelX - startModelX);
+    const newY = modelStartPos.current.y + (currentModelY - startModelY);
+
+    if (adapter.setModelPosition) {
+      adapter.setModelPosition(newX, newY);
+    } else if (model._modelMatrix) {
+      const newMatrix = [...model._modelMatrix.getArray()];
+      newMatrix[12] = newX;
+      newMatrix[13] = newY;
+      model._modelMatrix.setMatrix(newMatrix);
+    }
+    modelPositionRef.current = { x: newX, y: newY };
+  }, [canvasRef]);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== undefined && e.button !== 0) return;
     const adapter = (window as any).getLAppAdapter?.();
     if (!adapter || !canvasRef.current) return;
 
@@ -226,93 +267,95 @@ export const useLive2DModel = ({
     const isHitOnModel = model.isHitOnModel(modelX, modelY);
     // --- End Check ---
 
-    if (hitAreaName !== null || isHitOnModel) {
-      // Record potential tap/drag start
-      mouseDownTimeRef.current = Date.now();
-      mouseDownPosRef.current = { x: e.clientX, y: e.clientY }; // Use clientX/Y for distance check
-      isPotentialTapRef.current = true;
-      setIsDragging(false); // Ensure dragging is false initially
+    if (hitAreaName === null && !isHitOnModel) return;
 
-      // Store initial model position IF drag starts later
-      if (model._modelMatrix) {
-        const matrix = model._modelMatrix.getArray();
-        modelStartPos.current = { x: matrix[12], y: matrix[13] };
-      }
+    // Record potential tap/drag start
+    mouseDownTimeRef.current = Date.now();
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY }; // Use clientX/Y for distance check
+    isPotentialTapRef.current = true;
+    isDraggingRef.current = false;
+    setIsDragging(false); // Ensure dragging is false initially
+    dragStartPos.current = { x, y };
+
+    // Store initial model position IF drag starts later
+    if (model._modelMatrix) {
+      const matrix = model._modelMatrix.getArray();
+      modelStartPos.current = { x: matrix[12], y: matrix[13] };
     }
-  }, [canvasRef, modelInfo]);
+
+    const onMove = (ev: MouseEvent) => {
+      if (isPotentialTapRef.current) {
+        const timeElapsed = Date.now() - mouseDownTimeRef.current;
+        const deltaX = ev.clientX - mouseDownPosRef.current.x;
+        const deltaY = ev.clientY - mouseDownPosRef.current.y;
+        const distanceMoved = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+        // Check if it's a drag (moved enough distance OR held long enough while moving slightly)
+        if (distanceMoved > DRAG_DISTANCE_THRESHOLD_PX || (timeElapsed > TAP_DURATION_THRESHOLD_MS && distanceMoved > 1)) {
+          isPotentialTapRef.current = false; // It's a drag, not a tap
+          isDraggingRef.current = true;
+          setIsDragging(true);
+          document.body.dataset.petDragging = '1';
+          // she may be walking somewhere: the hand wins
+          petActions.interruptWalk?.();
+          // the walk may have left her at a new spot: measure the drag from where she is now
+          const m = adapter.getModel()?._modelMatrix?.getArray();
+          if (m) modelStartPos.current = { x: m[12], y: m[13] };
+        }
+      }
+      if (isDraggingRef.current) applyDrag(ev.clientX, ev.clientY);
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('mouseup', onUp, true);
+      window.removeEventListener('blur', onUp);
+
+      if (isDraggingRef.current) {
+        // Finalize drag
+        isDraggingRef.current = false;
+        setIsDragging(false);
+        delete document.body.dataset.petDragging;
+        const currentModel = (window as any).getLAppAdapter?.()?.getModel();
+        if (currentModel && currentModel._modelMatrix) {
+          const matrix = currentModel._modelMatrix.getArray();
+          const finalPos = { x: matrix[12], y: matrix[13] };
+          modelPositionRef.current = finalPos;
+          modelStartPos.current = finalPos; // Update base position for next potential drag
+          setPosition(finalPos);
+        }
+      } else if (isPotentialTapRef.current && typeof ev.clientX === 'number') {
+        // --- Tap Motion Logic ---
+        const timeElapsed = Date.now() - mouseDownTimeRef.current;
+        const deltaX = ev.clientX - mouseDownPosRef.current.x;
+        const deltaY = ev.clientY - mouseDownPosRef.current.y;
+        const distanceMoved = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+        // Check if it qualifies as a tap (short duration, minimal movement)
+        if (timeElapsed < TAP_DURATION_THRESHOLD_MS && distanceMoved < DRAG_DISTANCE_THRESHOLD_PX) {
+          const info = latestRef.current.modelInfo;
+          const allowTapMotion = info?.pointerInteractive !== false;
+          // [deskpet] a click only changes her face (angry or blushing), no poses
+          if (allowTapMotion && info?.tapMotions) petActions.tapReact();
+        }
+        // --- End Tap Motion Logic ---
+      }
+      // Reset potential tap flag regardless of outcome
+      isPotentialTapRef.current = false;
+    };
+
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', onUp, true);
+    // the window lost the mouse (alt-tab, another app took focus): don't leave her stuck to the cursor
+    window.addEventListener('blur', onUp);
+  }, [canvasRef, applyDrag]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const adapter = (window as any).getLAppAdapter?.();
     const view = LAppDelegate.getInstance().getView();
     const model = adapter?.getModel();
 
-    // --- Start Drag Logic ---
-    if (isPotentialTapRef.current && adapter && view && model && canvasRef.current) {
-      const timeElapsed = Date.now() - mouseDownTimeRef.current;
-      const deltaX = e.clientX - mouseDownPosRef.current.x;
-      const deltaY = e.clientY - mouseDownPosRef.current.y;
-      const distanceMoved = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-
-      // Check if it's a drag (moved enough distance OR held long enough while moving slightly)
-      if (distanceMoved > DRAG_DISTANCE_THRESHOLD_PX || (timeElapsed > TAP_DURATION_THRESHOLD_MS && distanceMoved > 1)) {
-        isPotentialTapRef.current = false; // It's a drag, not a tap
-        setIsDragging(true);
-
-        // Set initial drag screen position using the position from mousedown
-        const canvas = canvasRef.current;
-        const rect = canvas.getBoundingClientRect();
-        dragStartPos.current = {
-          x: mouseDownPosRef.current.x - rect.left,
-          y: mouseDownPosRef.current.y - rect.top,
-        };
-        // modelStartPos is already set in handleMouseDown
-      }
-    }
-    // --- End Start Drag Logic ---
-
-    // --- Continue Drag Logic ---
-    if (isDragging && adapter && view && model && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const currentX = e.clientX - rect.left; // Current screen X relative to canvas
-      const currentY = e.clientY - rect.top; // Current screen Y relative to canvas
-
-      // Convert screen delta to model delta
-      const scale = canvas.width / canvas.clientWidth;
-      const startScaledX = dragStartPos.current.x * scale;
-      const startScaledY = dragStartPos.current.y * scale;
-      const startModelX = view._deviceToScreen.transformX(startScaledX);
-      const startModelY = view._deviceToScreen.transformY(startScaledY);
-
-      const currentScaledX = currentX * scale;
-      const currentScaledY = currentY * scale;
-      const currentModelX = view._deviceToScreen.transformX(currentScaledX);
-      const currentModelY = view._deviceToScreen.transformY(currentScaledY);
-
-      const dx = currentModelX - startModelX;
-      const dy = currentModelY - startModelY;
-
-      const newX = modelStartPos.current.x + dx;
-      const newY = modelStartPos.current.y + dy;
-
-      // Use the adapter's setModelPosition method if available, otherwise update matrix directly
-      if (adapter.setModelPosition) {
-        adapter.setModelPosition(newX, newY);
-      } else if (model._modelMatrix) {
-        const matrix = model._modelMatrix.getArray();
-        const newMatrix = [...matrix];
-        newMatrix[12] = newX;
-        newMatrix[13] = newY;
-        model._modelMatrix.setMatrix(newMatrix);
-      }
-
-      modelPositionRef.current = { x: newX, y: newY };
-      setPosition({ x: newX, y: newY }); // Update React state if needed for UI feedback
-    }
-    // --- End Continue Drag Logic ---
-
-    // --- Pet Hover Logic (Unchanged) ---
-    if (isPet && !isDragging && !isPotentialTapRef.current && electronApi && adapter && view && model && canvasRef.current) {
+    // --- Pet Hover Logic (drag itself is handled by the document listeners from handleMouseDown) ---
+    if (isPet && !isDraggingRef.current && !isPotentialTapRef.current && electronApi && adapter && view && model && canvasRef.current) {
       const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -331,74 +374,20 @@ export const useLive2DModel = ({
       }
     }
     // --- End Pet Hover Logic ---
-  }, [isPet, isDragging, electronApi, canvasRef]);
+  }, [isPet, electronApi, canvasRef]);
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    const adapter = (window as any).getLAppAdapter?.();
-    const model = adapter?.getModel();
-    const view = LAppDelegate.getInstance().getView();
-
-    if (isDragging) {
-      // Finalize drag
-      setIsDragging(false);
-      if (adapter) {
-        const currentModel = adapter.getModel(); // Re-get model in case adapter changed
-        if (currentModel && currentModel._modelMatrix) {
-          const matrix = currentModel._modelMatrix.getArray();
-          const finalPos = { x: matrix[12], y: matrix[13] };
-          modelPositionRef.current = finalPos;
-          modelStartPos.current = finalPos; // Update base position for next potential drag
-          setPosition(finalPos);
-        }
-      }
-    } else if (isPotentialTapRef.current && adapter && model && view && canvasRef.current) {
-      // --- Tap Motion Logic ---
-      const timeElapsed = Date.now() - mouseDownTimeRef.current;
-      const deltaX = e.clientX - mouseDownPosRef.current.x;
-      const deltaY = e.clientY - mouseDownPosRef.current.y;
-      const distanceMoved = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-
-      // Check if it qualifies as a tap (short duration, minimal movement)
-      if (timeElapsed < TAP_DURATION_THRESHOLD_MS && distanceMoved < DRAG_DISTANCE_THRESHOLD_PX) {
-        const allowTapMotion = modelInfo?.pointerInteractive !== false;
-
-        if (allowTapMotion && modelInfo?.tapMotions) {
-          // Use mouse down position for hit testing
-          const canvas = canvasRef.current;
-          const rect = canvas.getBoundingClientRect();
-          const scale = canvas.width / canvas.clientWidth;
-          const downX = (mouseDownPosRef.current.x - rect.left) * scale;
-          const downY = (mouseDownPosRef.current.y - rect.top) * scale;
-          const modelX = view._deviceToScreen.transformX(downX);
-          const modelY = view._deviceToScreen.transformY(downY);
-
-          const hitAreaName = model.anyhitTest(modelX, modelY);
-          // Trigger tap motion using the specific hit area name or null for general body tap
-          model.startTapMotion(hitAreaName, modelInfo.tapMotions);
-        }
-      }
-      // --- End Tap Motion Logic ---
-    }
-
-    // Reset potential tap flag regardless of outcome
-    isPotentialTapRef.current = false;
-  }, [isDragging, canvasRef, modelInfo]);
+  // mouse-up during a press/drag is handled by the document listener installed in handleMouseDown
+  const handleMouseUp = useCallback(() => {}, []);
 
   const handleMouseLeave = useCallback(() => {
-    if (isDragging) {
-      // If dragging and mouse leaves, treat it like a mouse up to end drag
-      handleMouseUp({} as React.MouseEvent); // Pass a dummy event or adjust handleMouseUp signature
-    }
-    // Reset potential tap if mouse leaves before mouse up
-    if (isPotentialTapRef.current) {
-      isPotentialTapRef.current = false;
-    }
+    // a drag in progress is never ended here: the cursor is allowed to cross the bubble or outrun her
+    if (isDraggingRef.current || isPotentialTapRef.current) return;
     // --- Pet Hover Logic (Unchanged) ---
     if (isPet && electronApi && isHoveringModelRef.current) {
       isHoveringModelRef.current = false;
       electronApi.ipcRenderer.send('update-component-hover', 'live2d-model', false);
     }
-  }, [isPet, isDragging, electronApi, handleMouseUp]);
+  }, [isPet, electronApi]);
 
   useEffect(() => {
     if (!isPet && electronApi && isHoveringModelRef.current) {

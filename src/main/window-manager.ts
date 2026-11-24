@@ -71,6 +71,9 @@ export class WindowManager {
         sandbox: false,
         contextIsolation: true,
         nodeIntegration: true,
+        // [deskpet] hidden in the tray she must still hear the microphone and the server,
+        // so calling her brings her back; Chromium would otherwise throttle the page
+        backgroundThrottling: false,
       },
       hasShadow: false,
       paintWhenInitiallyHidden: true,
@@ -79,6 +82,14 @@ export class WindowManager {
 
     this.setupWindowEvents();
     this.loadContent();
+
+    // [deskpet] keep the pet off the taskbar whatever Windows does on show/focus
+    const keepOffTaskbar = () => {
+      if (this.currentMode === 'pet') this.window?.setSkipTaskbar(true);
+    };
+    this.window.on('show', keepOffTaskbar);
+    this.window.on('focus', keepOffTaskbar);
+    this.window.on('blur', keepOffTaskbar);
 
     this.window.on('enter-full-screen', () => {
       this.window?.webContents.send('window-fullscreen-change', true);
@@ -302,6 +313,8 @@ export class WindowManager {
       }
       if (!shouldIgnore) {
         this.window.setFocusable(true);
+        // [deskpet] on Windows, changing focusable puts the window back on the taskbar
+        this.window.setSkipTaskbar(true);
       }
     }
   }

@@ -34,6 +34,7 @@ export interface Message {
   timestamp: string;
   name?: string;
   avatar?: string;
+  images?: string[]; // [deskpet] thumbnails of the pictures the user gave with these words
 
   // Fields for different message types (make optional)
   type?: 'text' | 'tool_call_status'; // Add possible types, default to 'text' if omitted
@@ -46,6 +47,7 @@ export interface Actions {
   expressions?: string[] | number [];
   pictures?: string[];
   sounds?: string[];
+  motions?: string[]; // [deskpet] body actions
 }
 
 export interface MessageEvent {

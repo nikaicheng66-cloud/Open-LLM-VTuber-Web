@@ -60,6 +60,8 @@ export const ModeProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Listen for pre-mode-changed and mode-changed events
       window.electron.ipcRenderer.on('pre-mode-changed', handlePreModeChange);
       window.electron.ipcRenderer.on('mode-changed', handleModeChanged);
+      // [deskpet] tell the main process we can now receive mode changes
+      window.electron.ipcRenderer.send('mode-listener-ready');
 
       return () => {
         if (window.electron) {

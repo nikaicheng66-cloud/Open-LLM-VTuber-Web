@@ -3,6 +3,7 @@ import { app, ipcMain, globalShortcut, desktopCapturer } from "electron";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
 import { WindowManager } from "./window-manager";
 import { MenuManager } from "./menu-manager";
+import { setupAudioDrop } from "./audio-drop";
 
 let windowManager: WindowManager;
 let menuManager: MenuManager;
@@ -50,6 +51,18 @@ function setupIPC(): void {
     }
   });
 
+  // [deskpet] she was sent to the tray but the user is talking to her again: come back out,
+  // without stealing focus and without landing on the taskbar
+  ipcMain.on("window-show", () => {
+    const window = windowManager.getWindow();
+    if (!window || window.isVisible()) return;
+    window.showInactive();
+    if (windowManager.getCurrentMode() === "pet") {
+      window.setSkipTaskbar(true);
+      window.setAlwaysOnTop(true, "screen-saver");
+    }
+  });
+
   ipcMain.on(
     "update-component-hover",
     (_event, componentId: string, isHovering: boolean) => {
@@ -87,6 +100,33 @@ app.whenReady().then(() => {
     },
   });
   menuManager.createTray();
+  setupAudioDrop(window); // [deskpet]
+
+  // [deskpet] started with --pet (e.g. by the startup launcher): go straight to pet mode.
+  // Stay invisible and off the taskbar until the page has loaded and can switch modes,
+  // otherwise the switch is lost and the window stays transparent / on the taskbar.
+  if (process.argv.includes('--pet')) {
+    window.setOpacity(0);
+    window.setSkipTaskbar(true);
+    let switched = false;
+    const goPet = () => {
+      if (switched) return;
+      switched = true;
+      menuManager.setMode('pet');
+    };
+    ipcMain.once('mode-listener-ready', () => setTimeout(goPet, 800));
+    // the page can reload later (e.g. after the GPU drawing context was lost): put it back in pet mode
+    ipcMain.on('mode-listener-ready', (event) => {
+      if (switched && (menuManager as any).currentMode === 'pet') {
+        setTimeout(() => event.sender.send('mode-changed', 'pet'), 300);
+      }
+    });
+    // safety net: never leave her invisible
+    setTimeout(() => {
+      goPet();
+      setTimeout(() => window.setOpacity(1), 4000);
+    }, 20000);
+  }
 
   window.on("close", (event) => {
     if (!isQuitting) {

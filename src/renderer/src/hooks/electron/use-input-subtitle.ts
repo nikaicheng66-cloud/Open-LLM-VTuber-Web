@@ -14,7 +14,8 @@ export function useInputSubtitle() {
     handleCompositionStart,
     handleCompositionEnd,
     handleSend,
-
+    sendText,
+    setInputTextRaw,
   } = useTextInput();
 
   const { messages } = useChatHistory();
@@ -47,6 +48,9 @@ export function useInputSubtitle() {
   };
 
   return {
+    messages,
+    sendText,
+    setInputTextRaw,
     inputValue,
     handleInputChange,
     handleKeyPress,

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import { useMode } from '@/context/mode-context';
 interface Position {
   x: number
@@ -25,15 +25,45 @@ export function useDraggable({ componentId }: UseDraggableProps) {
   const positionRef = useRef<Position>({ x: 0, y: 0 });
   const dragStartRef = useRef<Position>({ x: 0, y: 0 });
   const elementRef = useRef<HTMLDivElement>(null);
+  const hoveredRef = useRef(false);
+  const draggingRef = useRef(false);
+
+  // [deskpet] React re-renders reset the inline transform to the default and the box jumped back
+  // (then forward again on the next move): put the dragged position back after every render
+  useLayoutEffect(() => {
+    const el = elementRef.current;
+    const { x, y } = positionRef.current;
+    if (el && (x || y)) {
+      el.style.transform = `translateX(-50%) translate(${x}px, ${y}px)`;
+    }
+  });
+
+  const setHover = (on: boolean) => {
+    if (!isPet || hoveredRef.current === on) return;
+    hoveredRef.current = on;
+    (window.api as any)?.updateComponentHover(componentId, on);
+  };
+
+  // [deskpet] while the box counts as "hovered" the whole transparent window takes the mouse, so the
+  // desktop underneath can't be clicked. If a mouseleave was missed (fast move, drag ended outside),
+  // release it as soon as the pointer is seen anywhere else.
+  useEffect(() => {
+    if (!isPet) return undefined;
+    const onMove = (e: MouseEvent) => {
+      if (!hoveredRef.current || draggingRef.current) return;
+      const el = elementRef.current;
+      if (el && !el.contains(e.target as Node)) setHover(false);
+    };
+    document.addEventListener('mousemove', onMove, true);
+    return () => document.removeEventListener('mousemove', onMove, true);
+  });
 
   /**
    * Handle mouse enter event for pet mode
    * Notifies the electron main process about hover state
    */
   const handleMouseEnter = () => {
-    if (isPet) {
-      (window.api as any)?.updateComponentHover(componentId, true);
-    }
+    setHover(true);
   };
 
   /**
@@ -41,9 +71,7 @@ export function useDraggable({ componentId }: UseDraggableProps) {
    * Notifies the electron main process about hover state
    */
   const handleMouseLeave = () => {
-    if (isPet && !isDragging) {
-      (window.api as any)?.updateComponentHover(componentId, false);
-    }
+    if (!draggingRef.current) setHover(false);
   };
 
   /**
@@ -52,6 +80,7 @@ export function useDraggable({ componentId }: UseDraggableProps) {
    */
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
+    draggingRef.current = true;
     // Calculate the initial offset
     dragStartRef.current = {
       x: e.clientX - positionRef.current.x,
@@ -79,8 +108,12 @@ export function useDraggable({ componentId }: UseDraggableProps) {
     /**
      * Cleanup function for mouse events
      */
-    const handleMouseUp = () => {
+    const handleMouseUp = (upEvent: MouseEvent) => {
       setIsDragging(false);
+      draggingRef.current = false;
+      // released outside the box: no mouseleave will come, so give the desktop its mouse back now
+      const under = document.elementFromPoint(upEvent.clientX, upEvent.clientY);
+      if (!elementRef.current || !under || !elementRef.current.contains(under)) setHover(false);
       // Clean up event listeners
       document.removeEventListener('mousemove', handleMouseMove, true);
       document.removeEventListener('mouseup', handleMouseUp, true);
